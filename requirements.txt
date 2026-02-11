@@ -1,0 +1,12 @@
+requests
+pydantic-settings
+fastapi
+uvicorn[standard]
+python-dotenv
+python-multipart
+alembic
+psycopg2-binary
+loguru
+pydantic[email]
+httpx
+vapi_server_sdk
