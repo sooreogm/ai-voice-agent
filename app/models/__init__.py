@@ -1,3 +1,6 @@
+from app.models.user import User
+from app.models.organization import Organization, OrganizationMember
+from app.models.agent import Agent
 from app.models.calls import Call
 from app.models.bookings import Booking
 from app.models.leads import Lead

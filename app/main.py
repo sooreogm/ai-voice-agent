@@ -1,23 +1,21 @@
-
 from contextlib import asynccontextmanager
 import logging
+
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
+
 from app.config import get_settings
-from app.routers import bookings, tools, vapi_webhooks
+from app.routers import auth, bookings, orgs, tools, vapi_webhooks
 from app.utils.api_utils import tags_metadata
 from app.utils.logging import setup_logging
 from app.utils.responses import error_response
 from fastapi.openapi.utils import get_openapi
 
-
 load_dotenv()
-
-# configure logging
-logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -111,6 +109,8 @@ app.openapi = custom_openapi
 api = APIRouter(prefix="/api")
 
 # Include routers
+api.include_router(auth.router)
+api.include_router(orgs.router)
 api.include_router(tools.router)
 api.include_router(bookings.router)
 api.include_router(vapi_webhooks.router)
@@ -129,22 +129,12 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_raw_body(request: Request, call_next):
-    body = await request.body()
-    print("---- INCOMING ----")
-    print("PATH:", request.url.path)
-    print("HEADERS:", dict(request.headers))
-    print("RAW BODY:", body[:2000])  # limit
-    print("------------------")
+    if get_settings().DEBUG:
+        body = await request.body()
+        logger.debug(
+            "request path={} headers={} body_preview={!r}",
+            request.url.path,
+            dict(request.headers),
+            body[:2000],
+        )
     return await call_next(request)
-
-# from fastapi import APIRouter, Depends
-# from app.config import get_settings, Settings
-
-# # router = APIRouter()
-
-# @app.get("/debug/settings")
-# def debug_settings(settings: Settings = Depends(get_settings)):
-#     return {
-#         "has_vapi_key": bool(settings.VAPI_TOOL_API_KEY),
-#         "vapi_key_len": len(settings.VAPI_TOOL_API_KEY or ""),
-#     }

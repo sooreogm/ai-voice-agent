@@ -3,8 +3,9 @@ VENV := .venv
 UVICORN := $(VENV)/bin/uvicorn
 PYTHON := $(VENV)/bin/python
 UV := uv
+ALEMBIC := $(VENV)/bin/alembic
 
-.PHONY: init create install update sync run activate clean import start
+.PHONY: init create install update sync run activate clean import start migrate upgrade-migration
 
 init:
 	$(UV) init
@@ -53,3 +54,9 @@ activate:
 
 clean:
 	rm -rf $(VENV)
+
+migrate:
+	$(ALEMBIC) revision --autogenerate -m "$(message)"
+
+upgrade-migration:
+	$(ALEMBIC) upgrade head

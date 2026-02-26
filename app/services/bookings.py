@@ -17,11 +17,13 @@ from app.schemas.bookings import (
 BASE_URL = get_settings().CAL_COM_BASE_URL
 
 
-def get_api_key() -> str:
+def get_api_key(override: Optional[str] = None) -> str:
+    if override:
+        return override
     if not get_settings().CAL_COM_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Cal.com API key not configured. Please set CAL_COM_API_KEY."
+            detail="Cal.com API key not configured. Set CAL_COM_API_KEY or connect Cal.com to your agent.",
         )
     return get_settings().CAL_COM_API_KEY
 
@@ -65,12 +67,14 @@ def _normalize_phone_number(phone: Optional[str]) -> Optional[str]:
     return "+" + cleaned
     
 def list_bookings(
-    # user_id: UUID,
     time_min: Optional[datetime] = None,
     time_max: Optional[datetime] = None,
     event_type_id: Optional[int] = None,
+    cal_com_api_key: Optional[str] = None,
+    cal_com_base_url: Optional[str] = None,
 ) -> CalComBookingsListResponse:
-    api_key = get_api_key()
+    api_key = get_api_key(cal_com_api_key)
+    base_url = cal_com_base_url or BASE_URL
     
     params = {}
     
@@ -91,18 +95,18 @@ def list_bookings(
     
     try:
         response = httpx.get(
-            f"{BASE_URL}/bookings",
+            f"{base_url}/bookings",
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
             },
+            params=params,
             timeout=30.0,
         )
         response.raise_for_status()
         data: dict = response.json()
+        logger.debug("Cal.com list_bookings response: {}", data)
 
-        print(data) 
-        
         bookings = []
         for item in dict(data.get("data", {})).get("bookings", []):
             booking = CalComBookingResponse(
@@ -146,8 +150,18 @@ def list_bookings(
 def create_booking(
     user_id: str,
     booking_data: CreateBookingRequest,
+    cal_com_api_key: Optional[str] = None,
+    cal_com_event_type_id: Optional[int] = None,
+    cal_com_base_url: Optional[str] = None,
 ) -> CalComBookingResponse:
-    api_key = get_api_key()
+    api_key = get_api_key(cal_com_api_key)
+    base_url = cal_com_base_url or BASE_URL
+    event_type_id = cal_com_event_type_id if cal_com_event_type_id is not None else get_settings().CAL_COM_EVENT_TYPE_ID
+    if event_type_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No event type configured. Connect Cal.com to your agent or set CAL_COM_EVENT_TYPE_ID.",
+        )
 
     if booking_data.start is None:
         raise HTTPException(
@@ -156,7 +170,7 @@ def create_booking(
         )
 
     payload = {
-        "eventTypeId": int(get_settings().CAL_COM_EVENT_TYPE_ID),
+        "eventTypeId": int(event_type_id),
         "start": _to_utc_z(booking_data.start),
         "attendee": {
             "name": booking_data.name,
@@ -187,7 +201,7 @@ def create_booking(
 
     try:
         resp = httpx.post(
-            f"{BASE_URL}/bookings",
+            f"{base_url}/bookings",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "cal-api-version": "2024-08-13",
@@ -231,19 +245,26 @@ def create_booking(
         ) from e
 
 def get_availability(
-    # user_id: UUID,
     start: datetime,
     end: datetime,
     event_type_id: Optional[int] = None,
     time_zone: Optional[str] = None,
     duration: Optional[int] = None,
     format: Optional[str] = None,
+    cal_com_api_key: Optional[str] = None,
+    cal_com_event_type_id: Optional[int] = None,
+    cal_com_base_url: Optional[str] = None,
 ) -> CalComAvailabilityResponse:
-    api_key = get_api_key()
-    
-    # Use event type from settings if not provided
+    api_key = get_api_key(cal_com_api_key)
+    base_url = cal_com_base_url or BASE_URL
     if event_type_id is None:
-        event_type_id = int(get_settings().CAL_COM_EVENT_TYPE_ID)
+        event_type_id = cal_com_event_type_id if cal_com_event_type_id is not None else get_settings().CAL_COM_EVENT_TYPE_ID
+    if event_type_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No event type configured. Connect Cal.com to your agent.",
+        )
+    event_type_id = int(event_type_id)
     
     # Build query parameters
     params = {
@@ -263,7 +284,7 @@ def get_availability(
     
     try:
         response = httpx.get(
-            f"{BASE_URL}/slots",
+            f"{base_url}/slots",
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",

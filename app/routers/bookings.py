@@ -1,17 +1,23 @@
-
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from starlette import status
 from loguru import logger
-from app.deps import require_vapi_key
-from app.schemas.bookings import CalComAvailabilityResponse, CalComBookingResponse, CalComBookingsListResponse, CreateBookingRequest
+from starlette import status
+
+from app.deps import get_agent_from_key
+from app.models import Agent
+from app.schemas.bookings import (
+    CalComAvailabilityResponse,
+    CalComBookingResponse,
+    CalComBookingsListResponse,
+    CreateBookingRequest,
+)
 from app.schemas.responses import SuccessResponse
 from app.services.bookings import create_booking, get_availability, list_bookings
 from app.utils.responses import responses_example
 
-
-router = APIRouter(prefix="/bookings", tags=["Bookings"], dependencies=[Depends(require_vapi_key)])
+router = APIRouter(prefix="/bookings", tags=["Bookings"])
 
 @router.get(
     "",
@@ -23,6 +29,7 @@ async def list_cal_com_bookings(
     time_min: Optional[str] = Query(None, description="Minimum time (ISO 8601)"),
     time_max: Optional[str] = Query(None, description="Maximum time (ISO 8601)"),
     event_type_id: Optional[int] = Query(None, description="Event type ID to filter"),
+    agent: Agent = Depends(get_agent_from_key),
 ):
     try:
         # Parse datetime strings if provided
@@ -48,10 +55,11 @@ async def list_cal_com_bookings(
                 )
         
         result = list_bookings(
-            # user_id=current_admin.id,
             time_min=time_min_dt,
             time_max=time_max_dt,
             event_type_id=event_type_id,
+            cal_com_api_key=agent.cal_com_api_key,
+            cal_com_base_url=None,
         )
         
         return SuccessResponse(
@@ -77,6 +85,7 @@ async def list_cal_com_bookings(
 )
 async def create_cal_com_booking(
     booking_data: CreateBookingRequest,
+    agent: Agent = Depends(get_agent_from_key),
 ):
     try:
         # Apply defaults if not provided
@@ -100,6 +109,9 @@ async def create_cal_com_booking(
         booking = create_booking(
             user_id=booking_data.email,
             booking_data=booking_data,
+            cal_com_api_key=agent.cal_com_api_key,
+            cal_com_event_type_id=agent.cal_com_event_type_id,
+            cal_com_base_url=None,
         )
         
         return SuccessResponse(
@@ -124,12 +136,13 @@ async def create_cal_com_booking(
     status_code=status.HTTP_200_OK,
 )
 async def get_available_slots(
-    start: Optional[str] = Query(None, description="Start time (ISO 8601 UTC, e.g., 2026-01-27T00:00:00Z). Defaults to today at 00:00:00 UTC."),
-    end: Optional[str] = Query(None, description="End time (ISO 8601 UTC, e.g., 2026-01-28T23:59:59Z). Defaults to 4 weeks from today at 23:59:59 UTC."),
-    event_type_id: Optional[int] = Query(None, description="Event type ID (uses default from settings if not provided)"),
-    time_zone: Optional[str] = Query(None, description="Time zone for returned slots (e.g., Europe/London, defaults to UTC)"),
-    duration: Optional[int] = Query(None, description="Duration in minutes (for multi-duration event types)"),
-    format: Optional[str] = Query(None, description="Format: 'range' for start/end times, 'time' for start only"),
+    start: Optional[str] = Query(None, description="Start time (ISO 8601 UTC)"),
+    end: Optional[str] = Query(None, description="End time (ISO 8601 UTC)"),
+    event_type_id: Optional[int] = Query(None, description="Event type ID"),
+    time_zone: Optional[str] = Query(None, description="Time zone (e.g., Europe/London)"),
+    duration: Optional[int] = Query(None, description="Duration in minutes"),
+    format: Optional[str] = Query(None, description="Format: 'range' or 'time'"),
+    agent: Agent = Depends(get_agent_from_key),
 ):
     try:
         # Set defaults if not provided
@@ -173,6 +186,9 @@ async def get_available_slots(
             time_zone=time_zone,
             duration=duration,
             format=format,
+            cal_com_api_key=agent.cal_com_api_key,
+            cal_com_event_type_id=agent.cal_com_event_type_id,
+            cal_com_base_url=None,
         )
         
         total_slots = sum(len(slots) for slots in availability.slots.values())

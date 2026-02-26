@@ -35,11 +35,15 @@ class Lead(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
     name: Mapped[Optional[str]] = mapped_column(String(255))
     business_name: Mapped[Optional[str]] = mapped_column(String(255))
     role: Mapped[Optional[str]] = mapped_column(String(120))
 
-    phone: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
 
     industry: Mapped[Optional[str]] = mapped_column(String(255))
@@ -52,4 +56,4 @@ class Lead(Base, TimestampMixin):
     bookings: Mapped[List["Booking"]] = relationship(back_populates="lead", cascade="save-update", passive_deletes=True)
     handoffs: Mapped[List["Handoff"]] = relationship(back_populates="lead", cascade="save-update", passive_deletes=True)
 
-
+    __table_args__ = (UniqueConstraint("organization_id", "phone", name="uq_leads_org_phone"),)

@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from app.models.bookings import Booking
     from app.models.handoffs import Handoff
     from app.models.tool_call import ToolCall
+    from app.models.organization import Organization
+    from app.models.agent import Agent
 
 from sqlalchemy import (
     String,
@@ -19,6 +21,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    UniqueConstraint,
     Enum as SAEnum,
     func,
 )
@@ -33,7 +36,13 @@ class Call(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    vapi_call_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    vapi_call_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
     lead_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
@@ -70,5 +79,7 @@ class Call(Base):
 
     __table_args__ = (
         Index("idx_calls_lead_id", "lead_id"),
+        Index("idx_calls_org_vapi", "organization_id", "vapi_call_id"),
+        UniqueConstraint("organization_id", "vapi_call_id", name="uq_calls_org_vapi_call_id"),
     )
 

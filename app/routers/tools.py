@@ -16,19 +16,36 @@ from typing import Optional, Literal, Any, Dict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.deps import require_vapi_key
 from app.db import get_db
+from app.deps import get_agent_from_key
+from app.models import Agent
 from app import models
 
-router = APIRouter(prefix="/tools", tags=["Tools"], dependencies=[Depends(require_vapi_key)])
+router = APIRouter(prefix="/tools", tags=["Tools"])
 
 # Helpers
 # -------------------------
-def get_or_create_call(db: Session, vapi_call_id: str) -> models.Call:
-    call = db.query(models.Call).filter(models.Call.vapi_call_id == vapi_call_id).first()
+def get_or_create_call(
+    db: Session,
+    vapi_call_id: str,
+    organization_id: uuid.UUID,
+    agent_id: Optional[uuid.UUID],
+) -> models.Call:
+    call = (
+        db.query(models.Call)
+        .filter(
+            models.Call.organization_id == organization_id,
+            models.Call.vapi_call_id == vapi_call_id,
+        )
+        .first()
+    )
     if call:
         return call
-    call = models.Call(vapi_call_id=vapi_call_id)
+    call = models.Call(
+        vapi_call_id=vapi_call_id,
+        organization_id=organization_id,
+        agent_id=agent_id,
+    )
     db.add(call)
     db.flush()
     return call
@@ -36,6 +53,7 @@ def get_or_create_call(db: Session, vapi_call_id: str) -> models.Call:
 
 def log_tool_call(
     db: Session,
+    organization_id: uuid.UUID,
     call_id: Optional[uuid.UUID],
     tool_name: str,
     request_json: Dict[str, Any],
@@ -45,6 +63,7 @@ def log_tool_call(
 ) -> None:
     db.add(
         models.ToolCall(
+            organization_id=organization_id,
             call_id=call_id,
             tool_name=tool_name,
             request_json=request_json,
@@ -58,19 +77,28 @@ def log_tool_call(
 # Endpoints
 # -------------------------
 @router.post("/leads/upsert", response_model=UpsertLeadResponse)
-def upsert_lead(payload: UpsertLeadRequest, db: Session = Depends(get_db)) -> UpsertLeadResponse:
+def upsert_lead(
+    payload: UpsertLeadRequest,
+    agent: Agent = Depends(get_agent_from_key),
+    db: Session = Depends(get_db),
+) -> UpsertLeadResponse:
+    org_id = agent.organization_id
+    agent_id = agent.id
     vapi_call_id = payload.call_id
-    call = get_or_create_call(db, vapi_call_id) if vapi_call_id else None
+    call = get_or_create_call(db, vapi_call_id, org_id, agent_id) if vapi_call_id else None
 
-    lead = db.query(models.Lead).filter(models.Lead.phone == payload.phone).first()
+    lead = (
+        db.query(models.Lead)
+        .filter(models.Lead.organization_id == org_id, models.Lead.phone == payload.phone)
+        .first()
+    )
     if lead:
         status = "updated"
     else:
-        lead = models.Lead(phone=payload.phone)
+        lead = models.Lead(organization_id=org_id, phone=payload.phone)
         db.add(lead)
         status = "created"
 
-    # update fields
     for field in ["name", "business_name", "role", "email", "industry", "location", "source"]:
         val = getattr(payload, field)
         if val is not None:
@@ -78,23 +106,30 @@ def upsert_lead(payload: UpsertLeadRequest, db: Session = Depends(get_db)) -> Up
 
     db.flush()
 
-    # attach lead to call if present
     if call and not call.lead_id:
         call.lead_id = lead.id
 
     resp = {"lead_id": str(lead.id), "status": status}
-    log_tool_call(db, call.id if call else None, "upsertLead", payload.model_dump(mode='json'), resp)
+    log_tool_call(db, org_id, call.id if call else None, "upsertLead", payload.model_dump(mode="json"), resp)
 
     db.commit()
     return UpsertLeadResponse(**resp)  # pyright: ignore[reportArgumentType]
 
 
 @router.post("/fit-check/save", response_model=FitCheckSaveResponse)
-def save_fit_check(payload: FitCheckSaveRequest, db: Session = Depends(get_db)) -> FitCheckSaveResponse:
-    call = get_or_create_call(db, payload.call_id)
+def save_fit_check(
+    payload: FitCheckSaveRequest,
+    agent: Agent = Depends(get_agent_from_key),
+    db: Session = Depends(get_db),
+) -> FitCheckSaveResponse:
+    org_id = agent.organization_id
+    call = get_or_create_call(db, payload.call_id, org_id, agent.id)
 
-    # Ensure lead exists
-    lead = db.query(models.Lead).filter(models.Lead.id == payload.lead_id).first()
+    lead = (
+        db.query(models.Lead)
+        .filter(models.Lead.id == payload.lead_id, models.Lead.organization_id == org_id)
+        .first()
+    )
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -102,6 +137,7 @@ def save_fit_check(payload: FitCheckSaveRequest, db: Session = Depends(get_db)) 
         call.lead_id = lead.id
 
     fit = models.FitCheck(
+        organization_id=org_id,
         call_id=call.id,
         lead_id=lead.id,
         business_offer=payload.business_offer,
@@ -117,24 +153,32 @@ def save_fit_check(payload: FitCheckSaveRequest, db: Session = Depends(get_db)) 
     db.flush()
 
     resp = {"fit_check_id": str(fit.id)}
-    log_tool_call(db, call.id, "saveFitCheck", payload.model_dump(mode='json'), resp)
+    log_tool_call(db, org_id, call.id, "saveFitCheck", payload.model_dump(mode="json"), resp)
 
     db.commit()
     return FitCheckSaveResponse(**resp)
 
 
 @router.post("/qualification/score", response_model=QualifyResponse)
-def qualify_and_tag(payload: QualifyRequest, db: Session = Depends(get_db)) -> QualifyResponse:
-    call = get_or_create_call(db, payload.call_id)
+def qualify_and_tag(
+    payload: QualifyRequest,
+    agent: Agent = Depends(get_agent_from_key),
+    db: Session = Depends(get_db),
+) -> QualifyResponse:
+    org_id = agent.organization_id
+    call = get_or_create_call(db, payload.call_id, org_id, agent.id)
 
-    lead = db.query(models.Lead).filter(models.Lead.id == payload.lead_id).first()
+    lead = (
+        db.query(models.Lead)
+        .filter(models.Lead.id == payload.lead_id, models.Lead.organization_id == org_id)
+        .first()
+    )
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
     if not call.lead_id:
         call.lead_id = lead.id
 
-    # Simple deterministic scoring (replace later with your own logic)
     score = 50
     if payload.diagnosis_tag:
         score += 10
@@ -144,6 +188,7 @@ def qualify_and_tag(payload: QualifyRequest, db: Session = Depends(get_db)) -> Q
     recommended_action: Literal["book", "park", "not-fit", "transfer"] = "book" if score >= 55 else "park"
 
     q = models.Qualification(
+        organization_id=org_id,
         call_id=call.id,
         lead_id=lead.id,
         diagnosis_tag=payload.diagnosis_tag,
@@ -156,7 +201,7 @@ def qualify_and_tag(payload: QualifyRequest, db: Session = Depends(get_db)) -> Q
     db.flush()
 
     resp = {"qualification_id": str(q.id), "score": score, "recommended_action": recommended_action}
-    log_tool_call(db, call.id, "qualifyAndTag", payload.model_dump(mode='json'), resp)
+    log_tool_call(db, org_id, call.id, "qualifyAndTag", payload.model_dump(mode="json"), resp)
 
     db.commit()
     return QualifyResponse(**resp)
@@ -227,24 +272,38 @@ def qualify_and_tag(payload: QualifyRequest, db: Session = Depends(get_db)) -> Q
 
 
 @router.post("/outcome/log", response_model=OutcomeLogResponse)
-def log_outcome(payload: OutcomeLogRequest, db: Session = Depends(get_db)) -> OutcomeLogResponse:
-    call = get_or_create_call(db, payload.call_id)
+def log_outcome(
+    payload: OutcomeLogRequest,
+    agent: Agent = Depends(get_agent_from_key),
+    db: Session = Depends(get_db),
+) -> OutcomeLogResponse:
+    org_id = agent.organization_id
+    call = get_or_create_call(db, payload.call_id, org_id, agent.id)
 
     call.outcome_tag = payload.outcome_tag  # pyright: ignore[reportAttributeAccessIssue]
     call.outcome_note = payload.note
 
     resp = {"ok": True}
-    log_tool_call(db, call.id, "logOutcome", payload.model_dump(mode='json'), resp)
+    log_tool_call(db, org_id, call.id, "logOutcome", payload.model_dump(mode="json"), resp)
 
     db.commit()
     return OutcomeLogResponse(**resp)
 
 
 @router.post("/handoff/request", response_model=HandoffResponse)
-def handoff_request(payload: HandoffRequest, db: Session = Depends(get_db)) -> HandoffResponse:
-    call = get_or_create_call(db, payload.call_id)
+def handoff_request(
+    payload: HandoffRequest,
+    agent: Agent = Depends(get_agent_from_key),
+    db: Session = Depends(get_db),
+) -> HandoffResponse:
+    org_id = agent.organization_id
+    call = get_or_create_call(db, payload.call_id, org_id, agent.id)
 
-    lead = db.query(models.Lead).filter(models.Lead.id == uuid.UUID(payload.lead_id)).first()
+    lead = (
+        db.query(models.Lead)
+        .filter(models.Lead.id == uuid.UUID(payload.lead_id), models.Lead.organization_id == org_id)
+        .first()
+    )
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -252,6 +311,7 @@ def handoff_request(payload: HandoffRequest, db: Session = Depends(get_db)) -> H
         call.lead_id = lead.id
 
     handoff = models.Handoff(
+        organization_id=org_id,
         call_id=call.id,
         lead_id=lead.id,
         reason=payload.reason,
@@ -262,7 +322,7 @@ def handoff_request(payload: HandoffRequest, db: Session = Depends(get_db)) -> H
     db.flush()
 
     resp = {"handoff_id": str(handoff.id), "status": "queued", "instruction": "I’m connecting you now. One moment please."}
-    log_tool_call(db, call.id, "handoffRequest", payload.model_dump(mode='json'), resp)
+    log_tool_call(db, org_id, call.id, "handoffRequest", payload.model_dump(mode="json"), resp)
 
     db.commit()
     return HandoffResponse(**resp)  # pyright: ignore[reportArgumentType]
