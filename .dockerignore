@@ -1,0 +1,43 @@
+# Virtual environments
+.venv
+venv
+env
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+.eggs
+dist
+build
+wheels
+
+# Environment and secrets
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# IDE and tooling
+.cursor
+.idea
+.vscode
+*.swp
+*.swo
+
+# Tests and docs (optional - exclude to shrink image)
+*.md
+!README.md
+tests
+.pytest_cache
+.coverage
+htmlcov
+
+# Misc
+Makefile
+*.plan.md
